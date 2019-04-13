@@ -168,6 +168,7 @@ Costmap2DROS::Costmap2DROS(const std::string& name, tf2_ros::Buffer& tf) :
 
   setUnpaddedRobotFootprint(makeFootprintFromParams(private_nh));
 
+  //其实就是用一个nav_msgs::OccypabcyGrid的topic，将代价地图中的cost一次按坐标装入。
   publisher_ = new Costmap2DPublisher(&private_nh, layered_costmap_->getCostmap(), global_frame_, "costmap",
                                       always_send_full_costmap);
 
@@ -394,6 +395,7 @@ void Costmap2DROS::movementCB(const ros::TimerEvent &event)
   }
 }
 
+//用于不断刷新代价地图，他的每一个循环通过updateMap函数实现
 void Costmap2DROS::mapUpdateLoop(double frequency)
 {
   // the user might not want to run the loop every cycle
@@ -436,6 +438,7 @@ void Costmap2DROS::mapUpdateLoop(double frequency)
   }
 }
 
+//updateMap函数是利用LayeredCostmap的updateMap函数实现
 void Costmap2DROS::updateMap()
 {
   if (!stop_updates_)
@@ -461,6 +464,7 @@ void Costmap2DROS::updateMap()
   }
 }
 
+//开启代价地图函数和stop对应
 void Costmap2DROS::start()
 {
   std::vector < boost::shared_ptr<Layer> > *plugins = layered_costmap_->getPlugins();
@@ -526,6 +530,8 @@ void Costmap2DROS::resetLayers()
   }
 }
 
+
+//通过tf变换实现的获取当前位姿，在这里可能会出现tf问题
 bool Costmap2DROS::getRobotPose(geometry_msgs::PoseStamped& global_pose) const
 {
   tf2::toMsg(tf2::Transform::getIdentity(), global_pose.pose);

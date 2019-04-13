@@ -164,6 +164,7 @@ private:
   double minx_, miny_, maxx_, maxy_;
   unsigned int bx0_, bxn_, by0_, byn_;
 
+  //这是一个容器，但是我并不知道是干什么用的
   std::vector<boost::shared_ptr<Layer> > plugins_;
 
   bool initialized_;
