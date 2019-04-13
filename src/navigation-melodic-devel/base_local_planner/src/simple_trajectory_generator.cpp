@@ -65,6 +65,7 @@ void SimpleTrajectoryGenerator::initialise(
     const Eigen::Vector3f& vsamples,
     bool discretize_by_time) {
   /*
+    * 我们实际上在这里生成了所有的速度样本向量，从中可以生成后来的轨迹。
    * We actually generate all velocity sample vectors here, from which to generate trajectories later on
    */
   double max_vel_th = limits->max_vel_theta;
@@ -82,6 +83,7 @@ void SimpleTrajectoryGenerator::initialise(
   double min_vel_y = limits->min_vel_y;
   double max_vel_y = limits->max_vel_y;
 
+  //如果任何维度中的采样数都为零，则不一般生成样本 
   // if sampling number is zero in any dimension, we don't generate samples generically
   if (vsamples[0] * vsamples[1] * vsamples[2] > 0) {
     //compute the feasible velocity space based on the rate at which we run
@@ -89,12 +91,16 @@ void SimpleTrajectoryGenerator::initialise(
     Eigen::Vector3f min_vel = Eigen::Vector3f::Zero();
 
     if ( ! use_dwa_) {
+
+      //没有超出目标的意义，也可能会打破
+      //机器人行为，因此我们将速度限制在模拟时间内不超调的速度。 
       // there is no point in overshooting the goal, and it also may break the
       // robot behavior, so we limit the velocities to those that do not overshoot in sim_time
       double dist = hypot(goal[0] - pos[0], goal[1] - pos[1]);
       max_vel_x = std::max(std::min(max_vel_x, dist / sim_time_), min_vel_x);
       max_vel_y = std::max(std::min(max_vel_y, dist / sim_time_), min_vel_y);
 
+      //如果我们使用连续加速度，我们可以采样在模拟时间内达到的最大速度.
       // if we use continous acceleration, we can sample the max velocity we can reach in sim_time_
       max_vel[0] = std::min(max_vel_x, vel[0] + acc_lim[0] * sim_time_);
       max_vel[1] = std::min(max_vel_y, vel[1] + acc_lim[1] * sim_time_);
@@ -104,6 +110,7 @@ void SimpleTrajectoryGenerator::initialise(
       min_vel[1] = std::max(min_vel_y, vel[1] - acc_lim[1] * sim_time_);
       min_vel[2] = std::max(min_vel_th, vel[2] - acc_lim[2] * sim_time_);
     } else {
+      //由于DWA的加速度不超过第一步，我们只能在模拟周期内的速度范围内取样。 
       // with dwa do not accelerate beyond the first step, we only sample within velocities we reach in sim_period
       max_vel[0] = std::min(max_vel_x, vel[0] + acc_lim[0] * sim_period_);
       max_vel[1] = std::min(max_vel_y, vel[1] + acc_lim[1] * sim_period_);
@@ -149,6 +156,7 @@ void SimpleTrajectoryGenerator::setParameters(
 }
 
 /**
+ *这个生成器是否可以创建更多的轨迹 
  * Whether this generator can create more trajectories
  */
 bool SimpleTrajectoryGenerator::hasMoreTrajectories() {
@@ -156,6 +164,7 @@ bool SimpleTrajectoryGenerator::hasMoreTrajectories() {
 }
 
 /**
+ *创建并返回下一个样本轨迹 
  * Create and return the next sample trajectory
  */
 bool SimpleTrajectoryGenerator::nextTrajectory(Trajectory &comp_traj) {
@@ -188,6 +197,7 @@ bool SimpleTrajectoryGenerator::generateTrajectory(
   //trajectory might be reused so we'll make sure to reset it
   traj.resetPoints();
 
+  ///确保机器人至少可以使用所需的最小速度之一进行平移和旋转（如果设置）
   // make sure that the robot would at least be moving with one of
   // the required minimum velocities for translation and rotation (if set)
   if ((limits_->min_vel_trans >= 0 && vmag + eps < limits_->min_vel_trans) &&

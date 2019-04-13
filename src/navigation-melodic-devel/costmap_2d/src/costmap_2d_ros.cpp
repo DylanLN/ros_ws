@@ -78,19 +78,25 @@ Costmap2DROS::Costmap2DROS(const std::string& name, tf2_ros::Buffer& tf) :
     dsrv_(NULL),
     footprint_padding_(0.0)
 {
+  //用一些东西初始化旧位姿
   // Initialize old pose with something
   tf2::toMsg(tf2::Transform::getIdentity(), old_pose_.pose);
 
   ros::NodeHandle private_nh("~/" + name);
   ros::NodeHandle g_nh;
 
+  //获得两帧数据
   // get two frames
   private_nh.param("global_frame", global_frame_, std::string("map"));
   private_nh.param("robot_base_frame", robot_base_frame_, std::string("base_link"));
 
   ros::Time last_error = ros::Time::now();
   std::string tf_error;
+
+  //我们需要确保机器人基础框架和全局框架之间的转换是可用的
   // we need to make sure that the transform between the robot base frame and the global frame is available
+  //构造函数反复检查两个frame的tf变换是否正常，
+  //报的这个警告应该大家也不陌生，但是tf不稳定这种事情，我一直也很抓狂，除了重启节点没什么好办法……
   while (ros::ok()
       && !tf_.canTransform(global_frame_, robot_base_frame_, ros::Time(), ros::Duration(0.1), &tf_error))
   {
@@ -101,6 +107,7 @@ Costmap2DROS::Costmap2DROS(const std::string& name, tf2_ros::Buffer& tf) :
                robot_base_frame_.c_str(), global_frame_.c_str(), tf_error.c_str());
       last_error = ros::Time::now();
     }
+    //错误字符串将累积，错误通常是相同的，因此最后一个将用于上面的警告。 在此处重置字符串以避免累积。
     // The error string will accumulate and errors will typically be the same, so the last
     // will do for the warning above. Reset the string here to avoid accumulation.
     tf_error.clear();
@@ -112,6 +119,10 @@ Costmap2DROS::Costmap2DROS(const std::string& name, tf2_ros::Buffer& tf) :
   private_nh.param("track_unknown_space", track_unknown_space, false);
   private_nh.param("always_send_full_costmap", always_send_full_costmap, false);
 
+  //接下来是costmap的重头戏——layers。大家都知道，代价地图是由不同层级的plugins(插件)逐层累加的，
+  //包括静态地图层、障碍层、膨胀层等等，那么通过LayeredCostmap（分层代价地图）的对象，创造了一个由指向plugin
+  //的共享指针组成的容器，通过配置文件，向里一一添加插件层，若我们需要用其他传感器的信息制作代价地图，
+  //可以通过自定义插件层，加入即可。
   layered_costmap_ = new LayeredCostmap(global_frame_, rolling_window, track_unknown_space);
 
   if (!private_nh.hasParam("plugins"))
@@ -119,6 +130,7 @@ Costmap2DROS::Costmap2DROS(const std::string& name, tf2_ros::Buffer& tf) :
     resetOldParameters(private_nh);
   }
 
+  //下面是通过xmlrpc通信机制，阅读配置文件进行插件层初始化过程
   if (private_nh.hasParam("plugins"))
   {
     XmlRpc::XmlRpcValue my_list;
@@ -130,6 +142,7 @@ Costmap2DROS::Costmap2DROS(const std::string& name, tf2_ros::Buffer& tf) :
       ROS_INFO("Using plugin \"%s\"", pname.c_str());
 
       boost::shared_ptr<Layer> plugin = plugin_loader_.createInstance(type);
+      //将一个指针放入容器
       layered_costmap_->addPlugin(plugin);
       plugin->initialize(layered_costmap_, name + "/" + pname, &tf_);
     }
