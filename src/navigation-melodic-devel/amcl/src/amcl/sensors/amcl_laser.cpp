@@ -118,6 +118,7 @@ AMCLLaser::SetModelLikelihoodFieldProb(double z_hit,
 
 ////////////////////////////////////////////////////////////////////////////////
 // Apply the laser sensor model
+//通过特定的感知模型进行粒子滤波器的更新
 bool AMCLLaser::UpdateSensor(pf_t *pf, AMCLSensorData *data)
 {
   if (this->max_beams < 2)
@@ -210,6 +211,7 @@ double AMCLLaser::BeamModel(AMCLLaserData *data, pf_sample_set_t* set)
   return(total_weight);
 }
 
+//似然域测量模型的具体实现
 double AMCLLaser::LikelihoodFieldModel(AMCLLaserData *data, pf_sample_set_t* set)
 {
   AMCLLaser *self;
@@ -226,17 +228,21 @@ double AMCLLaser::LikelihoodFieldModel(AMCLLaserData *data, pf_sample_set_t* set
 
   total_weight = 0.0;
 
+  //遍历整个粒子集合，重新计算权重
   // Compute the sample weights
   for (j = 0; j < set->sample_count; j++)
   {
     sample = set->samples + j;
+    //这里是里程计运动模型更新后的位姿
     pose = sample->pose;
 
+    //这个函数是将传感器局部坐标经过三角变换映射到全局坐标系下
     // Take account of the laser pose relative to the robot
     pose = pf_vector_coord_add(self->laser_pose, pose);
 
     p = 1.0;
 
+    //预计算似然域，离散栅格化
     // Pre-compute a couple of things
     double z_hit_denom = 2 * self->sigma_hit * self->sigma_hit;
     double z_rand_mult = 1.0/data->range_max;
@@ -247,36 +253,44 @@ double AMCLLaser::LikelihoodFieldModel(AMCLLaserData *data, pf_sample_set_t* set
     if(step < 1)
       step = 1;
 
+    //开始通过利用与最近物体的欧式距离计算激光模型似然的算法，对所有特征（激光数据）进行遍历
     for (i = 0; i < data->range_count; i += step)
     {
       obs_range = data->ranges[i][0];
       obs_bearing = data->ranges[i][1];
 
+      //似然域测量模型简单地将最大距离读数丢失
       // This model ignores max range readings
       if(obs_range >= data->range_max)
         continue;
 
+      //检查NAN
       // Check for NaN
       if(obs_range != obs_range)
         continue;
 
       pz = 0.0;
 
+      //计算波束的最终距离并将其转换到全局坐标系下
       // Compute the endpoint of the beam
       hit.v[0] = pose.v[0] + obs_range * cos(pose.v[2] + obs_bearing);
       hit.v[1] = pose.v[1] + obs_range * sin(pose.v[2] + obs_bearing);
 
+      //转换为地图网格坐标。
       // Convert to map grid coords.
       int mi, mj;
       mi = MAP_GXWX(self->map, hit.v[0]);
       mj = MAP_GYWY(self->map, hit.v[1]);
       
+      //这一块的参数在map_update_cspace函数中计算，具体来说是将整个
+      //地图代入并计算障碍物位置，并将最近距离预先计算好，再把当前的栅格代入即可
       // Part 1: Get distance from the hit to closest obstacle.
       // Off-map penalized as max distance
       if(!MAP_VALID(self->map, mi, mj))
         z = self->map->max_occ_dist;
       else
         z = self->map->cells[MAP_INDEX(self->map,mi,mj)].occ_dist;
+      //将正态分布与均匀分布混合后得到的似然结果
       // Gaussian model
       // NOTE: this should have a normalization of 1/(sqrt(2pi)*sigma)
       pz += self->z_hit * exp(-(z * z) / z_hit_denom);
@@ -292,7 +306,7 @@ double AMCLLaser::LikelihoodFieldModel(AMCLLaserData *data, pf_sample_set_t* set
       // works well, though...
       p += pz*pz*pz;
     }
-
+    //得到单个粒子的权重，并加入到粒子集中
     sample->weight *= p;
     total_weight += sample->weight;
   }

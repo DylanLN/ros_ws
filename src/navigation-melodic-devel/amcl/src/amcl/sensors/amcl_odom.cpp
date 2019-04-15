@@ -112,6 +112,7 @@ AMCLOdom::SetModel( odom_model_t type,
 // Apply the action model
 bool AMCLOdom::UpdateAction(pf_t *pf, AMCLSensorData *data)
 {
+  //这个AMCLOdomData其实只有位姿与本时刻的变化量两部分组成
   AMCLOdomData *ndata;
   ndata = (AMCLOdomData*) data;
 
@@ -162,13 +163,18 @@ bool AMCLOdom::UpdateAction(pf_t *pf, AMCLSensorData *data)
     }
   }
   break;
+
+  //我们选择差分轮的模型来看看
   case ODOM_MODEL_DIFF:
   {
+    //运动模型在单个运动时刻的近似
     // Implement sample_motion_odometry (Prob Rob p 136)
     double delta_rot1, delta_trans, delta_rot2;
     double delta_rot1_hat, delta_trans_hat, delta_rot2_hat;
     double delta_rot1_noise, delta_rot2_noise;
 
+    //由于测距模型将机器人在时刻内的运动近似成旋转、平移、旋转的三个步骤，
+    //这里是在原地旋转时直接将第一次旋转略去，纯粹当做第二次旋转
     // Avoid computing a bearing from two poses that are extremely near each
     // other (happens on in-place rotation).
     if(sqrt(ndata->delta.v[1]*ndata->delta.v[1] + 
@@ -177,6 +183,8 @@ bool AMCLOdom::UpdateAction(pf_t *pf, AMCLSensorData *data)
     else
       delta_rot1 = angle_diff(atan2(ndata->delta.v[1], ndata->delta.v[0]),
                               old_pose.v[2]);
+    
+    //这里是对里程计读数的相对运动参数进行计算
     delta_trans = sqrt(ndata->delta.v[0]*ndata->delta.v[0] +
                        ndata->delta.v[1]*ndata->delta.v[1]);
     delta_rot2 = angle_diff(ndata->delta.v[2], delta_rot1);
@@ -193,6 +201,8 @@ bool AMCLOdom::UpdateAction(pf_t *pf, AMCLSensorData *data)
     {
       pf_sample_t* sample = set->samples + i;
 
+      //这一段是机器人里程计模型的采样算法，计算对给定位姿Xt-1与Xt之间的相对运动参数
+      //加入高斯噪声模型是误差分布
       // Sample pose differences
       delta_rot1_hat = angle_diff(delta_rot1,
                                   pf_ran_gaussian(this->alpha1*delta_rot1_noise*delta_rot1_noise +
@@ -205,6 +215,7 @@ bool AMCLOdom::UpdateAction(pf_t *pf, AMCLSensorData *data)
                                   pf_ran_gaussian(this->alpha1*delta_rot2_noise*delta_rot2_noise +
                                                   this->alpha2*delta_trans*delta_trans));
 
+      //这一段是为了计算运动参数各自的误差概率，并叠加在先验参数上。
       // Apply sampled update to particle pose
       sample->pose.v[0] += delta_trans_hat * 
               cos(sample->pose.v[2] + delta_rot1_hat);

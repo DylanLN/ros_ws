@@ -258,6 +258,7 @@ void pf_update_action(pf_t *pf, pf_action_model_fn_t action_fn, void *action_dat
 
 
 #include <float.h>
+//更新一些新的传感器观测的滤波器
 // Update the filter with some new sensor observation
 void pf_update_sensor(pf_t *pf, pf_sensor_model_fn_t sensor_fn, void *sensor_data)
 {
@@ -268,11 +269,13 @@ void pf_update_sensor(pf_t *pf, pf_sensor_model_fn_t sensor_fn, void *sensor_dat
 
   set = pf->sets + pf->current_set;
 
+  //计算样本权重
   // Compute the sample weights
   total = (*sensor_fn) (sensor_data, set);
   
   if (total > 0.0)
   {
+    //将粒子集的权值归一化
     // Normalize weights
     double w_avg=0.0;
     for (i = 0; i < set->sample_count; i++)
@@ -281,6 +284,7 @@ void pf_update_sensor(pf_t *pf, pf_sensor_model_fn_t sensor_fn, void *sensor_dat
       w_avg += sample->weight;
       sample->weight /= total;
     }
+    //更新短期似然平均与长期似然平均
     // Update running averages of likelihood of samples (Prob Rob p258)
     w_avg /= set->sample_count;
     if(pf->w_slow == 0.0)

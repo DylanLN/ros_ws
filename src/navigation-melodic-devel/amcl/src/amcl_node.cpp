@@ -80,14 +80,18 @@
 using namespace amcl;
 
 // Pose hypothesis
+//这是一个粒子
 typedef struct
 {
+  //权重
   // Total weight (weights sum to 1)
   double weight;
 
+  //位姿估计平均值
   // Mean of pose esimate
   pf_vector_t pf_pose_mean;
 
+  //位姿估计协方差
   // Covariance of pose estimate
   pf_matrix_t pf_pose_cov;
 
@@ -850,6 +854,7 @@ AmclNode::mapReceived(const nav_msgs::OccupancyGridConstPtr& msg)
   first_map_received_ = true;
 }
 
+//比较重要，它根据地图信息创造了地图空闲区域、粒子滤波器、里程计运动模型与激光感知的似然模型。
 void
 AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
 {
@@ -904,12 +909,13 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
   pf_init(pf_, pf_init_pose_mean, pf_init_pose_cov);
   pf_init_ = false;
 
-  //定义里程计与激光雷达并初始化数据
+  //定义里程计与激光雷达并初始化
   // Instantiate the sensor objects
   // Odometry
   delete odom_;
   odom_ = new AMCLOdom();
   ROS_ASSERT(odom_);
+  //里程计运动模型  alpha1_-alpha5_在旋转中预计的测位的旋转动量噪声的估计值。
   odom_->SetModel( odom_model_type_, alpha1_, alpha2_, alpha3_, alpha4_, alpha5_ );
   // Laser
   delete laser_;
@@ -926,6 +932,7 @@ AmclNode::handleMapMessage(const nav_msgs::OccupancyGrid& msg)
 					beam_skip_threshold_, beam_skip_error_threshold_);
     ROS_INFO("Done initializing likelihood field model.");
   }
+  //激光数据似然域模型
   else
   {
     ROS_INFO("Initializing likelihood field model; this can take some time on large maps...");
@@ -1026,11 +1033,14 @@ AmclNode::getOdomPose(geometry_msgs::PoseStamped& odom_pose,
 }
 
 
+//主要创建粒子滤波器
+//在循环中直到产生一个位置与方向都合法的粒子，退出循环，也就是说每次调用该函数产生一个随机位姿粒子
 pf_vector_t
 AmclNode::uniformPoseGenerator(void* arg)
 {
   map_t* map = (map_t*)arg;
 #if NEW_UNIFORM_SAMPLING
+  //返回服从均匀分布的[0.0,1.0)之间的double型随机数；
   unsigned int rand_index = drand48() * free_space_indices.size();
   std::pair<int,int> free_point = free_space_indices[rand_index];
   pf_vector_t p;
@@ -1111,13 +1121,14 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   boost::recursive_mutex::scoped_lock lr(configuration_mutex_);
   int laser_index = -1;
 
+  //这一段先是从frame_to_laser_这个map中寻找scan，如果没有就新建一个，但是用map来储存。
   // Do we have the base->base_laser Tx yet?  
   //感觉这里是支持多个激光雷达的，找到当前响应的激光雷达只前储存的信息。
   //如相对于base的转换，是否更新等，使用map结构直接通过id来找到对应序号。
-  //如果之前没有备案则在map结构中备案，然后存到frame_to_laser及laser_中下次备用。
   if(frame_to_laser_.find(laser_scan_frame_id) == frame_to_laser_.end())
   {
     ROS_DEBUG("Setting up laser %d (frame_id=%s)\n", (int)frame_to_laser_.size(), laser_scan_frame_id.c_str());
+    //更新激光感知模型
     lasers_.push_back(new AMCLLaser(*laser_));
     lasers_update_.push_back(true);
     laser_index = frame_to_laser_.size();
@@ -1220,6 +1231,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   }
   //如果机器人已经移动，更新过滤器
   // If the robot has moved, update the filter
+  //这里是正式开始更新滤波器了，将里程计的先验位姿更新为后验
   else if(pf_init_ && lasers_update_[laser_index])//如果已经初始化并需要更新则更新运动模型
   {
     //printf("pose\n");
@@ -1240,6 +1252,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   }
 
   bool resampled = false;
+  //将激光数据处理为AMCLLaserData
   // If the robot has moved, update the filter
   if(lasers_update_[laser_index])
   {//接下来一大片代码都是对原始激光雷达数据进行处理，转换到AMCLLaserDate。包括角度最小值，增量到base_frame转换
@@ -1251,6 +1264,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     // min, max, and increment angles of the laser in the base frame.
     //
     // Construct min and max angles of laser, in the base_link frame.
+    //激光扫面的最小值与角度增量
     tf2::Quaternion q;
     q.setRPY(0.0, 0.0, laser_scan->angle_min);
     geometry_msgs::QuaternionStamped min_q, inc_q;
@@ -1276,6 +1290,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     double angle_min = tf2::getYaw(min_q.quaternion);
     double angle_increment = tf2::getYaw(inc_q.quaternion) - angle_min;
 
+    //fmod函数是用来取余数。
     // wrapping angle to [-pi .. pi]
     angle_increment = fmod(angle_increment + 5*M_PI, 2*M_PI) - M_PI;
 
@@ -1331,6 +1346,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
     pf_sample_set_t* set = pf_->sets + pf_->current_set;
     ROS_DEBUG("Num samples: %d\n", set->sample_count);
 
+    //这里是讲一次更新之后的所有粒子发不成PoseArray ,即小箭头们
     // Publish the resulting cloud
     // TODO: set maximum rate for publishing
     if (!m_force_update)
@@ -1356,6 +1372,8 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
   if(resampled || force_publication)
   {
     //遍历所有粒子簇，找出权重均值最大的簇，其平均位姿就是我们要求的机器人后验位姿，到此一次循环已经所有完成。
+    //遍历聚类后的粒子集，选择权重最大的粒子集，该粒子集的平均位姿就是本次更新后的机器人估计位姿，
+    //以下的代码目的都是为了计算出权值最大的估计位姿并发送话题与TF变换
     // Read out the current hypotheses
     double max_weight = 0.0;
     int max_weight_hyp = -1;
