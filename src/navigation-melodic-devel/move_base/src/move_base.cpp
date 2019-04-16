@@ -63,7 +63,8 @@ namespace move_base {
     ros::NodeHandle nh;
 
     recovery_trigger_ = PLANNING_R;
-
+    
+    //参数的配置读取
     //get some parameters that will be global to the move base node
     std::string global_planner, local_planner;
     private_nh.param("base_global_planner", global_planner, std::string("navfn/NavfnROS"));
@@ -84,6 +85,7 @@ namespace move_base {
     latest_plan_ = new std::vector<geometry_msgs::PoseStamped>();
     controller_plan_ = new std::vector<geometry_msgs::PoseStamped>();
 
+    //开启了规划线程planThread()函数
     //set up the planner's thread
     planner_thread_ = new boost::thread(boost::bind(&MoveBase::planThread, this));
 
@@ -141,6 +143,7 @@ namespace move_base {
     planner_costmap_ros_->start();
     controller_costmap_ros_->start();
 
+    //发布两个服务，规划和清除地图
     //advertise a service for getting a plan
     make_plan_srv_ = private_nh.advertiseService("make_plan", &MoveBase::planService, this);
 
@@ -564,20 +567,27 @@ namespace move_base {
       while(wait_for_wake || !runPlanner_){
         //if we should not be running the planner then suspend this thread
         ROS_DEBUG_NAMED("move_base_plan_thread","Planner thread is suspending");
+
+        //使线程进入睡眠，等待MoveBase::executeCb，以及规划周期的唤醒
         planner_cond_.wait(lock);
         wait_for_wake = false;
       }
       ros::Time start_time = ros::Time::now();
 
+      //planner_goal_是在MoveBase::executeCb中得到的目标位姿，需要上锁保证线程安全
       //time to plan! get a copy of the goal and unlock the mutex
       geometry_msgs::PoseStamped temp_goal = planner_goal_;
       lock.unlock();
       ROS_DEBUG_NAMED("move_base_plan_thread","Planning...");
 
       //run planner
+      //清除原来规划出的路径向量
       planner_plan_->clear();
+      //MoveBase::makePlan作用是获取机器人的位姿作为起点，
+      //然后调用全局规划器的makePlan返回规划路径，存储在planner_plan_
       bool gotPlan = n.ok() && makePlan(temp_goal, *planner_plan_);
 
+      //如果规划出路径则更新相应路径，并将state_转换为CONTROLLING状态
       if(gotPlan){
         ROS_DEBUG_NAMED("move_base_plan_thread","Got Plan with %zu points!", planner_plan_->size());
         //pointer swap the plans under mutex (the controller will pull from latest_plan_)
@@ -585,7 +595,10 @@ namespace move_base {
 
         lock.lock();
         planner_plan_ = latest_plan_;
-        latest_plan_ = temp_plan;
+        
+        //将最新的全局路径放到latest_plan_中，其在MoveBase::executeCycle中
+        //被传递到controller_plan_中，利用锁来进行同步
+        latest_plan_ = temp_plan; 
         last_valid_plan_ = ros::Time::now();
         planning_retries_ = 0;
         new_global_plan_ = true;
@@ -599,8 +612,11 @@ namespace move_base {
           runPlanner_ = false;
         lock.unlock();
       }
+      //如果没有规划出路径，并且处于PLANNING状态，则判断是否超过最大规划周期或者规划次数
+      //如果是则进入自转模式，否则应该会等待MoveBase::executeCycle的唤醒再次规划
       //if we didn't get a plan and we are in the planning state (the robot isn't moving)
-      else if(state_==PLANNING){
+      else if(state_==PLANNING){    //仅在MoveBase::executeCb及其调用的MoveBase::executeCycle
+        //或者重置状态时会被设置为PLANNING，一般是刚获得新目标，或者得到路径但计算不出下一步控制时重新进行路径规划
         ROS_DEBUG_NAMED("move_base_plan_thread","No Plan...");
         ros::Time attempt_end = last_valid_plan_ + ros::Duration(planner_patience_);
 
@@ -614,7 +630,7 @@ namespace move_base {
           //we'll move into our obstacle clearing mode
           state_ = CLEARING;
           runPlanner_ = false;  // proper solution for issue #523
-          publishZeroVelocity();
+          publishZeroVelocity();  //直接向cmd_vel话题发布000的速度信息
           recovery_trigger_ = PLANNING_R;
         }
 
@@ -624,6 +640,7 @@ namespace move_base {
       //take the mutex for the next iteration
       lock.lock();
 
+      //如果没到规划周期则定时器睡眠，在定时器中通过planner_cond_唤醒,这里规划周期为0
       //setup sleep interface if needed
       if(planner_frequency_ > 0){
         ros::Duration sleep_time = (start_time + ros::Duration(1.0/planner_frequency_)) - ros::Time::now();
@@ -642,16 +659,21 @@ namespace move_base {
       return;
     }
 
+    //判断goal有效性
+    //统一转换到全局坐标系
     geometry_msgs::PoseStamped goal = goalToGlobalFrame(move_base_goal->target_pose);
 
     //we have a goal so start the planner
     boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
     planner_goal_ = goal;
+
+    //启动新线程来获取规划路径
     runPlanner_ = true;
+    //唤醒等待条件变量的一个线程：即用planner_cond_.wait()的MoveBase::planThread()
     planner_cond_.notify_one();
     lock.unlock();
 
-    current_goal_pub_.publish(goal);
+    current_goal_pub_.publish(goal); //这个话题貌似只有一些rviz上用来显示的
     std::vector<geometry_msgs::PoseStamped> global_plan;
 
     ros::Rate r(controller_frequency_);
@@ -672,51 +694,59 @@ namespace move_base {
     {
       if(c_freq_change_)
       {
+        //更改控制周期
         ROS_INFO("Setting controller frequency to %.2f", controller_frequency_);
         r = ros::Rate(controller_frequency_);
         c_freq_change_ = false;
       }
 
+      //是否有抢占请求，根据参考1第8点的说法，SimpleActionServer的政策是，新的goal都会抢占旧的goal，
+      //这里应该只是为了清除新goal的一些状态。（那些待定的goal也有可能抢占，或者可以直接cancel抢占Current？）
       if(as_->isPreemptRequested()){
+        //如果是新的goal这个函数会将其他goal设置为被抢占状态
         if(as_->isNewGoalAvailable()){
           //if we're active and a new goal is available, we'll accept it, but we won't shut anything down
+          ////接收new goal
           move_base_msgs::MoveBaseGoal new_goal = *as_->acceptNewGoal();
 
           if(!isQuaternionValid(new_goal.target_pose.pose.orientation)){
             as_->setAborted(move_base_msgs::MoveBaseResult(), "Aborting on goal because it was sent with an invalid quaternion");
-            return;
+            return;//无效退出
           }
 
-          goal = goalToGlobalFrame(new_goal.target_pose);
+          goal = goalToGlobalFrame(new_goal.target_pose);//统一转换到全局坐标系
 
           //we'll make sure that we reset our state for the next execution cycle
           recovery_index_ = 0;
           state_ = PLANNING;
 
           //we have a new goal so make sure the planner is awake
+          //唤醒规划线程
           lock.lock();
           planner_goal_ = goal;
           runPlanner_ = true;
           planner_cond_.notify_one();
           lock.unlock();
 
+          //将目标点发布到rviz
           //publish the goal point to the visualizer
           ROS_DEBUG_NAMED("move_base","move_base has received a goal of x: %.2f, y: %.2f", goal.pose.position.x, goal.pose.position.y);
           current_goal_pub_.publish(goal);
 
+          //确保重置超时和计数器
           //make sure to reset our timeouts and counters
           last_valid_control_ = ros::Time::now();
           last_valid_plan_ = ros::Time::now();
           last_oscillation_reset_ = ros::Time::now();
           planning_retries_ = 0;
         }
-        else {
+        else {//如果是cancel了
           //if we've been preempted explicitly we need to shut things down
-          resetState();
+          resetState();//停止规划线程、停车  等等；
 
           //notify the ActionServer that we've successfully preempted
           ROS_DEBUG_NAMED("move_base","Move base preempting the current goal");
-          as_->setPreempted();
+          as_->setPreempted();  //设置current goal被抢占
 
           //we'll actually return from execute after preempting
           return;
@@ -725,7 +755,7 @@ namespace move_base {
 
       //we also want to check if we've changed global frames because we need to transform our goal pose
       if(goal.header.frame_id != planner_costmap_ros_->getGlobalFrameID()){
-        goal = goalToGlobalFrame(goal);
+        goal = goalToGlobalFrame(goal); //判断这段时间是否更改了坐标系
 
         //we want to go back to the planning state for the next execution cycle
         recovery_index_ = 0;
@@ -753,18 +783,19 @@ namespace move_base {
       ros::WallTime start = ros::WallTime::now();
 
       //the real work on pursuing a goal is done here
-      bool done = executeCycle(goal, global_plan);
+      bool done = executeCycle(goal, global_plan);//这是控制机器人跟踪的主要函数
 
       //if we're done, then we'll return from execute
       if(done)
         return;
 
+      //检查目标的执行是否以某种方式完成
       //check if execution of the goal has completed in some way
 
       ros::WallDuration t_diff = ros::WallTime::now() - start;
       ROS_DEBUG_NAMED("move_base","Full control cycle time: %.9f\n", t_diff.toSec());
 
-      r.sleep();
+      r.sleep();    //控制周期睡眠
       //make sure to sleep for the remainder of our cycle time
       if(r.cycleTime() > ros::Duration(1 / controller_frequency_) && state_ == CONTROLLING)
         ROS_WARN("Control loop missed its desired rate of %.4fHz... the loop actually took %.4f seconds", controller_frequency_, r.cycleTime().toSec());
@@ -776,6 +807,7 @@ namespace move_base {
     planner_cond_.notify_one();
     lock.unlock();
 
+    //如果节点被杀死，我们将中止并返回 
     //if the node is killed then we'll abort and return
     as_->setAborted(move_base_msgs::MoveBaseResult(), "Aborting on the goal because the node has been killed");
     return;
@@ -787,6 +819,7 @@ namespace move_base {
   }
 
   bool MoveBase::executeCycle(geometry_msgs::PoseStamped& goal, std::vector<geometry_msgs::PoseStamped>& global_plan){
+    
     boost::recursive_mutex::scoped_lock ecl(configuration_mutex_);
     //we need to be able to publish velocity commands
     geometry_msgs::Twist cmd_vel;
@@ -800,7 +833,10 @@ namespace move_base {
     move_base_msgs::MoveBaseFeedback feedback;
     feedback.base_position = current_position;
     as_->publishFeedback(feedback);
+    //变量定义并获取机器人坐标发布给server的feedback
 
+
+    //检查是否移动到足够远的位置以重置振荡超时 
     //check to see if we've moved far enough to reset our oscillation timeout
     if(distance(current_position, oscillation_pose_) >= oscillation_distance_)
     {
@@ -812,6 +848,7 @@ namespace move_base {
         recovery_index_ = 0;
     }
 
+    //如果观测传感器数据不够新，则让机器人停机并退出函数
     //check that the observation buffers for the costmap are current, we don't want to drive blind
     if(!controller_costmap_ros_->isCurrent()){
       ROS_WARN("[%s]:Sensor data is out of date, we're not going to allow commanding of the base for safety",ros::this_node::getName().c_str());
@@ -820,7 +857,8 @@ namespace move_base {
     }
 
     //if we have a new plan then grab it and give it to the controller
-    if(new_global_plan_){
+    //该变量在规划器线程中，当新的路径被规划出来，该值被置1，完成latest_plan_到controller_plan_的转换
+    if(new_global_plan_){ 
       //make sure to set the new plan flag to false
       new_global_plan_ = false;
 
@@ -835,8 +873,10 @@ namespace move_base {
       lock.unlock();
       ROS_DEBUG_NAMED("move_base","pointers swapped!");
 
+      //将全局路径设置到局部路径规划器中
       if(!tc_->setPlan(*controller_plan_)){
         //ABORT and SHUTDOWN COSTMAPS
+        //同时关闭规划器线程，没有必要规划了
         ROS_ERROR("Failed to pass global plan to the controller, aborting.");
         resetState();
 
@@ -849,14 +889,18 @@ namespace move_base {
         return true;
       }
 
+      //如果全局路径有效，则不需要recovery
       //make sure to reset recovery_index_ since we were able to find a valid plan
       if(recovery_trigger_ == PLANNING_R)
         recovery_index_ = 0;
     }
 
+    //移动基本状态机，处理导航的控制逻辑 
     //the move_base state machine, handles the control logic for navigation
+    //对状态机进行处理
     switch(state_){
       //if we are in a planning state, then we'll attempt to make a plan
+      //唤醒规划线程
       case PLANNING:
         {
           boost::recursive_mutex::scoped_lock lock(planner_mutex_);
@@ -871,10 +915,12 @@ namespace move_base {
         ROS_DEBUG_NAMED("move_base","In controlling state.");
 
         //check to see if we've reached our goal
+        //如果已经到达结果
         if(tc_->isGoalReached()){
           ROS_DEBUG_NAMED("move_base","Goal reached!");
           resetState();
 
+          //重置状态，关闭规划器线程，设置告知Client结果
           //disable the planner thread
           boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
           runPlanner_ = false;
@@ -885,6 +931,10 @@ namespace move_base {
         }
 
         //check for an oscillation condition
+        //last_oscillation_reset_获得新目标会重置,距离超过震荡距离（默认0.5）会重置，进行recovery后会重置
+        
+        //所以是太久没有发生上面的事就震动一下，防止长时间在同一个地方徘徊？？？？
+        //这里oscillation_timeout_默认为0 ，不发生。
         if(oscillation_timeout_ > 0.0 &&
             last_oscillation_reset_ + ros::Duration(oscillation_timeout_) < ros::Time::now())
         {
@@ -896,20 +946,23 @@ namespace move_base {
         {
          boost::unique_lock<costmap_2d::Costmap2D::mutex_t> lock(*(controller_costmap_ros_->getCostmap()->getMutex()));
         
+        //如果局部路径规划成功
         if(tc_->computeVelocityCommands(cmd_vel)){
           ROS_DEBUG_NAMED( "move_base", "Got a valid command from the local planner: %.3lf, %.3lf, %.3lf",
                            cmd_vel.linear.x, cmd_vel.linear.y, cmd_vel.angular.z );
           last_valid_control_ = ros::Time::now();
           //make sure that we send the velocity command to the base
+          //发布控制速度信息
           vel_pub_.publish(cmd_vel);
           if(recovery_trigger_ == CONTROLLING_R)
             recovery_index_ = 0;
         }
-        else {
+        else {//局部规划失败
           ROS_DEBUG_NAMED("move_base", "The local planner could not find a valid plan.");
           ros::Time attempt_end = last_valid_control_ + ros::Duration(controller_patience_);
 
           //check if we've tried to find a valid control for longer than our time limit
+          //判断是否控制超时
           if(ros::Time::now() > attempt_end){
             //we'll move into our obstacle clearing mode
             publishZeroVelocity();
@@ -917,6 +970,7 @@ namespace move_base {
             recovery_trigger_ = CONTROLLING_R;
           }
           else{
+            //没超时则启动规划器线程重新规划
             //otherwise, if we can't find a valid control, we'll go back to planning
             last_valid_plan_ = ros::Time::now();
             planning_retries_ = 0;
@@ -933,7 +987,8 @@ namespace move_base {
         }
 
         break;
-
+      
+      //规划或者控制失败在恢复或者清除中
       //we'll try to clear out space with any user-provided recovery behaviors
       case CLEARING:
         ROS_DEBUG_NAMED("move_base","In clearing/recovery state");
@@ -954,7 +1009,7 @@ namespace move_base {
           //update the index of the next recovery behavior that we'll try
           recovery_index_++;
         }
-        else{
+        else{//遍历还是不行
           ROS_DEBUG_NAMED("move_base_recovery","All recovery behaviors have failed, locking the planner and disabling it.");
           //disable the planner thread
           boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
@@ -963,6 +1018,7 @@ namespace move_base {
 
           ROS_DEBUG_NAMED("move_base_recovery","Something should abort after this.");
 
+          //分原因发布消息
           if(recovery_trigger_ == CONTROLLING_R){
             ROS_ERROR("Aborting because a valid control could not be found. Even after executing all recovery behaviors");
             as_->setAborted(move_base_msgs::MoveBaseResult(), "Failed to find a valid control. Even after executing recovery behaviors.");
@@ -976,7 +1032,7 @@ namespace move_base {
             as_->setAborted(move_base_msgs::MoveBaseResult(), "Robot is oscillating. Even after executing recovery behaviors.");
           }
           resetState();
-          return true;
+          return true;  //已经done了
         }
         break;
       default:

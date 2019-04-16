@@ -1324,7 +1324,7 @@ AmclNode::laserReceived(const sensor_msgs::LaserScanConstPtr& laser_scan)
               (i * angle_increment);
     }
 
-    //注意这里是amcl_laser.cpp的UpdateSensor，不是amcl_sensor.cpp的。通过判断前面设置的测量模型调用pf_update_sensor,
+    //注意这里是amcl_laser.cpp的UpdateSensor。通过判断前面设置的测量模型调用pf_update_sensor,
     //该函数需要传入相应模型的处理函数，这里所有的测量模型在《概率机器人》第六章有详细讲，后面只针对自己使用的likelihood_field
     //pf_update_sensor实现对所有例子更新权重，并归一化，计算出《概率机器人》8.3.5的失效恢复的长期似然和短期似然
     lasers_[laser_index]->UpdateSensor(pf_, (AMCLSensorData*)&ldata);

@@ -64,17 +64,31 @@ namespace move_base {
   typedef actionlib::SimpleActionServer<move_base_msgs::MoveBaseAction> MoveBaseActionServer;
 
   enum MoveBaseState {
-    PLANNING,
-    CONTROLLING,
-    CLEARING
+    PLANNING, //在规划路径中
+    CONTROLLING,  //在控制机器人运动中
+    CLEARING  //规划或者控制失败在恢复或者清除中
   };
+  /*一般默认状态或者接收到一个有效goal时是PLANNING，在规划出全局路径后state_会由PLANNING->CONTROLLING，
+    如果规划失败则由PLANNING->CLEARING。在MoveBase::executeCycle中，会分别对这三种状态做处理：
+        还在PLANNING中则唤醒规划线程让它干活
+        如果已经在CONTROLLING中，判断是否已经到达目的地，否则判断是否出现震动？否则调用局部路径规划，如果成功得
+    到速度则直接发布到cmd_vel，失败则判断是否控制超时，不超时的话让全局再规划一个路径。如果出现了问题需要CLEARING
+    （仅有全局规划失败、局部规划失败、长时间困在一片小区域三种原因），则每次尝试一种recovery方法，直到所有尝试完*/
+
 
   enum RecoveryTrigger
   {
-    PLANNING_R,
-    CONTROLLING_R,
-    OSCILLATION_R
+    PLANNING_R,//全局规划失败
+    CONTROLLING_R,//局部规划失败
+    OSCILLATION_R//长时间困在一小片区域
   };
+
+  /*  recovery是指恢复的规划器，其跟全局规划器和局部规划器是同一个等级的。不同的是，它是在机器人在局部代价地图或者
+    全局代价地图中找不到路时才会被调用，比如rotate_recovery让机器人原地360°旋转，clear_costmap_recovery将代价
+    地图恢复到静态地图的样子。
+      这些规划器都通过nav_core::RecoveryBehavior这个接口来被movebase调用。在movebase中，在构造函数通过
+    MoveBase::loadRecoveryBehaviors和MoveBase::loadDefaultRecoveryBehaviors()两个函数来加载。一
+    般情况下没有自定义则加载上述两个规划器。然后在MoveBase::executeCycle中视情况调用。*/
 
   /**
    * @class MoveBase
@@ -177,14 +191,17 @@ namespace move_base {
 
       tf2_ros::Buffer& tf_;
 
+      //就是actionlib的服务器
       MoveBaseActionServer* as_;
 
+      //全局路径规划器、局部路径规划期加载并创建实例后的指针。
       boost::shared_ptr<nav_core::BaseLocalPlanner> tc_;
       costmap_2d::Costmap2DROS* planner_costmap_ros_, *controller_costmap_ros_;
 
       boost::shared_ptr<nav_core::BaseGlobalPlanner> planner_;
       std::string robot_base_frame_, global_frame_;
 
+      //这个是转圈圈的？恢复状态
       std::vector<boost::shared_ptr<nav_core::RecoveryBehavior> > recovery_behaviors_;
       unsigned int recovery_index_;
 
@@ -205,19 +222,28 @@ namespace move_base {
 
       ros::Time last_valid_plan_, last_valid_control_, last_oscillation_reset_;
       geometry_msgs::PoseStamped oscillation_pose_;
+
+      //以插件形式实现全局规划器、局部规划器和丢失时恢复规划器。
+      //插件形式可以实现随时动态地加载c++类库，但需要在包中注册该插件，不用这个的话需要提前链接
       pluginlib::ClassLoader<nav_core::BaseGlobalPlanner> bgp_loader_;
       pluginlib::ClassLoader<nav_core::BaseLocalPlanner> blp_loader_;
       pluginlib::ClassLoader<nav_core::RecoveryBehavior> recovery_loader_;
 
       //set up plan triple buffer
+
+      //一般保存规划器中新鲜出炉的路径，然后将其给latest_plan_
       std::vector<geometry_msgs::PoseStamped>* planner_plan_;
+      //作为一个桥梁，在MoveBase::executeCycle中传递给controller_plan_
       std::vector<geometry_msgs::PoseStamped>* latest_plan_;
       std::vector<geometry_msgs::PoseStamped>* controller_plan_;
 
       //set up the planner's thread
       bool runPlanner_;
       boost::recursive_mutex planner_mutex_;
+      //boost的一种结合了互斥锁的用法，可以使一个线程进入睡眠状态，然后在另外一个线程触发唤醒
       boost::condition_variable_any planner_cond_;
+      
+      //通过这个值将goal在MoveBase::executeCb与MoveBase::planThread()之间传递
       geometry_msgs::PoseStamped planner_goal_;
       boost::thread* planner_thread_;
 
