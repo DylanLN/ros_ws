@@ -50,6 +50,7 @@ namespace move_base {
   MoveBase::MoveBase(tf2_ros::Buffer& tf) :
     tf_(tf),
     as_(NULL),
+    //全局导航的地图             ，//局部导航的地图
     planner_costmap_ros_(NULL), controller_costmap_ros_(NULL),
     bgp_loader_("nav_core", "nav_core::BaseGlobalPlanner"),
     blp_loader_("nav_core", "nav_core::BaseLocalPlanner"), 
@@ -563,6 +564,7 @@ namespace move_base {
     bool wait_for_wake = false;
     boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
     while(n.ok()){
+      //等待上面的executeCb函数使得runPlanner_=true
       //check if we should run the planner (the mutex is locked)
       while(wait_for_wake || !runPlanner_){
         //if we should not be running the planner then suspend this thread
@@ -589,6 +591,7 @@ namespace move_base {
 
       //如果规划出路径则更新相应路径，并将state_转换为CONTROLLING状态
       if(gotPlan){
+        //这是成功规划处路径
         ROS_DEBUG_NAMED("move_base_plan_thread","Got Plan with %zu points!", planner_plan_->size());
         //pointer swap the plans under mutex (the controller will pull from latest_plan_)
         std::vector<geometry_msgs::PoseStamped>* temp_plan = planner_plan_;
@@ -664,6 +667,7 @@ namespace move_base {
     geometry_msgs::PoseStamped goal = goalToGlobalFrame(move_base_goal->target_pose);
 
     //we have a goal so start the planner
+    //通知planner线程进行路径规划
     boost::unique_lock<boost::recursive_mutex> lock(planner_mutex_);
     planner_goal_ = goal;
 
@@ -725,6 +729,7 @@ namespace move_base {
           lock.lock();
           planner_goal_ = goal;
           runPlanner_ = true;
+          //发布新的goal，通知planner线程工作
           planner_cond_.notify_one();
           lock.unlock();
 
@@ -749,6 +754,7 @@ namespace move_base {
           as_->setPreempted();  //设置current goal被抢占
 
           //we'll actually return from execute after preempting
+          //强制退出
           return;
         }
       }
@@ -783,6 +789,7 @@ namespace move_base {
       ros::WallTime start = ros::WallTime::now();
 
       //the real work on pursuing a goal is done here
+      //真正工作的代码
       bool done = executeCycle(goal, global_plan);//这是控制机器人跟踪的主要函数
 
       //if we're done, then we'll return from execute
@@ -796,6 +803,7 @@ namespace move_base {
       ROS_DEBUG_NAMED("move_base","Full control cycle time: %.9f\n", t_diff.toSec());
 
       r.sleep();    //控制周期睡眠
+      //这是一个一般的警告信息，规划的时间超时
       //make sure to sleep for the remainder of our cycle time
       if(r.cycleTime() > ros::Duration(1 / controller_frequency_) && state_ == CONTROLLING)
         ROS_WARN("Control loop missed its desired rate of %.4fHz... the loop actually took %.4f seconds", controller_frequency_, r.cycleTime().toSec());
