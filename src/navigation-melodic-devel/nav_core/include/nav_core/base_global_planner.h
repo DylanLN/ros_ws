@@ -78,6 +78,7 @@ namespace nav_core {
        * @param  name The name of this planner
        * @param  costmap_ros A pointer to the ROS wrapper of the costmap to use for planning
        */
+       //初始化
       virtual void initialize(std::string name, costmap_2d::Costmap2DROS* costmap_ros) = 0;
 
       /**

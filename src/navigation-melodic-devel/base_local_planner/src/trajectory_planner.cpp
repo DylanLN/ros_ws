@@ -345,11 +345,13 @@ namespace base_local_planner{
       //the point is legal... add it to the trajectory
       traj.addPoint(x_i, y_i, theta_i);
 
+      //生成路径和速度
       //calculate velocities
       vx_i = computeNewVelocity(vx_samp, vx_i, acc_x, dt);
       vy_i = computeNewVelocity(vy_samp, vy_i, acc_y, dt);
       vtheta_i = computeNewVelocity(vtheta_samp, vtheta_i, acc_theta, dt);
 
+      //计算位置
       //calculate positions
       x_i = computeNewXPosition(x_i, vx_i, vy_i, theta_i, dt);
       y_i = computeNewYPosition(y_i, vx_i, vy_i, theta_i, dt);
@@ -361,6 +363,8 @@ namespace base_local_planner{
 
     //ROS_INFO("OccCost: %f, vx: %.2f, vy: %.2f, vtheta: %.2f", occ_cost, vx_samp, vy_samp, vtheta_samp);
     double cost = -1.0;
+    
+    //对路径进行评分
     if (!heading_scoring_) {
       cost = pdist_scale_ * path_dist + goal_dist * gdist_scale_ + occdist_scale_ * occ_cost;
     } else {
@@ -540,11 +544,13 @@ namespace base_local_planner{
     double max_vel_x = max_vel_x_, max_vel_theta;
     double min_vel_x, min_vel_theta;
 
+    //检查最终点是否是有效的，判断变量在updatePlan中被赋值
     if( final_goal_position_valid_ ){
       double final_goal_dist = hypot( final_goal_x_ - x, final_goal_y_ - y );
       max_vel_x = min( max_vel_x, final_goal_dist / sim_time_ );
     }
 
+    //是否使用dwa算法，sim_peroid是1/controller_frequency_，sim_time_向前仿真时间，
     //should we use the dynamic window approach?
     if (dwa_) {
       max_vel_x = max(min(max_vel_x, vx + acc_x * sim_period_), min_vel_x_);

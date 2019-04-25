@@ -54,12 +54,14 @@ namespace nav_core {
        * @param cmd_vel Will be filled with the velocity command to be passed to the robot base
        * @return True if a valid velocity command was found, false otherwise
        */
+      //最为关键的地方，计算机器人下一刻的速度
       virtual bool computeVelocityCommands(geometry_msgs::Twist& cmd_vel) = 0;
 
       /**
        * @brief  Check if the goal pose has been achieved by the local planner
        * @return True if achieved, false otherwise
        */
+      //判断是否到达目标点
       virtual bool isGoalReached() = 0;
 
       /**
@@ -67,6 +69,7 @@ namespace nav_core {
        * @param plan The plan to pass to the local planner
        * @return True if the plan was updated successfully, false otherwise
        */
+       //该函数是加载全局路径
       virtual bool setPlan(const std::vector<geometry_msgs::PoseStamped>& plan) = 0;
 
       /**
@@ -75,6 +78,7 @@ namespace nav_core {
        * @param tf A pointer to a transform listener
        * @param costmap_ros The cost map to use for assigning costs to local plans
        */
+      //初始化
       virtual void initialize(std::string name, tf2_ros::Buffer* tf, costmap_2d::Costmap2DROS* costmap_ros) = 0;
 
       /**

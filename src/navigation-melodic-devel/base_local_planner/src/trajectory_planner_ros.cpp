@@ -373,6 +373,7 @@ namespace base_local_planner {
     return true;
   }
 
+  //计算机器人下一刻的速度
   bool TrajectoryPlannerROS::computeVelocityCommands(geometry_msgs::Twist& cmd_vel){
     if (! isInitialized()) {
       ROS_ERROR("This planner has not been initialized, please call initialize() before using this planner");
@@ -387,6 +388,7 @@ namespace base_local_planner {
 
     std::vector<geometry_msgs::PoseStamped> transformed_plan;
     //get the global plan in our frame
+    //检查初始化、检查是否已经到达目标点
     if (!transformGlobalPlan(*tf_, global_plan_, global_pose, *costmap_, global_frame_, transformed_plan)) {
       ROS_WARN("Could not transform the global plan to the frame of the controller");
       return false;
@@ -421,6 +423,7 @@ namespace base_local_planner {
 
     double goal_th = yaw;
 
+    //如果已经到达目标点，姿态还没到
     //check to see if we've reached the goal position
     if (xy_tolerance_latch_ || (getGoalPositionDistance(global_pose, goal_x, goal_y) <= xy_goal_tolerance_)) {
 
@@ -444,6 +447,8 @@ namespace base_local_planner {
         //we need to call the next two lines to make sure that the trajectory
         //planner updates its path distance and goal distance grids
         tc_->updatePlan(transformed_plan);
+        
+        //所以这个函数最关键的子函数是findBestPath
         Trajectory path = tc_->findBestPath(global_pose, robot_vel, drive_cmds);
         map_viz_.publishCostCloud(costmap_);
 

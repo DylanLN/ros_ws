@@ -76,6 +76,7 @@ namespace dwa_local_planner {
        * @param tf A pointer to a transform listener
        * @param costmap The cost map to use for assigning costs to trajectories
        */
+      //初始化
       void initialize(std::string name, tf2_ros::Buffer* tf,
           costmap_2d::Costmap2DROS* costmap_ros);
 
@@ -135,8 +136,10 @@ namespace dwa_local_planner {
       // for visualisation, publishers of global and local plan
       ros::Publisher g_plan_pub_, l_plan_pub_;
 
+      //用来存储运动控制参数及costmap2d、tf等，会被传入dp_costmap_2d::Costmap_2dROS* costmao_ros_
       base_local_planner::LocalPlannerUtil planner_util_;
 
+      //正常的dwa运动控制类
       boost::shared_ptr<DWAPlanner> dp_; ///< @brief The trajectory controller
 
       costmap_2d::Costmap2DROS* costmap_ros_;
@@ -146,12 +149,14 @@ namespace dwa_local_planner {
       bool setup_;
       geometry_msgs::PoseStamped current_pose_;
 
+      //到达目标点后的停止旋转运动控制类
       base_local_planner::LatchedStopRotateController latchedStopRotateController_;
 
 
       bool initialized_;
 
 
+      //用来辅助获取odom信息，会被传入dp_
       base_local_planner::OdometryHelperRos odom_helper_;
       std::string odom_topic_;
   };
